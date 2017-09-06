@@ -47,7 +47,8 @@ class FCTransposeW(SamplingTrainableMixin, ModelLayer):
         )
 
         self.w = self.create_param(param_name='w',
-                                   shape=[output_dims, input_dims],
+                                   # reverse the input/output dims
+                                   shape=[input_dims, output_dims],
                                    initializer=weight_init,
                                    optimizer=weight_optim)
 
