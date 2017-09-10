@@ -1,10 +1,5 @@
-<<<<<<< HEAD
-## @package fc_without_bias
-# Module caffe2.python.layers.fc_without_bias
-=======
 ## @package fc_transpose_w
 # Module caffe2.python.layers.fc_transpose_w
->>>>>>> f4e5abfef9c65e8cfb4ab10d990fe3cc8d785371
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -65,8 +60,4 @@ class FCTransposeW(SamplingTrainableMixin, ModelLayer):
 
     @property
     def param_blobs(self):
-<<<<<<< HEAD
         return [self.w]
-=======
-        return [self.w]
->>>>>>> f4e5abfef9c65e8cfb4ab10d990fe3cc8d785371
