@@ -421,7 +421,7 @@ class ModelHelper(object):
     def GetAllParams(self, namescope=None):
         return self.GetParams(namescope) + self.GetComputedParams(namescope)
 
-    def TensorProtosDBInput(
+    def ModelTensorProtosDBInput(
         self, unused_blob_in, blob_out, batch_size, db, db_type, **kwargs
     ):
         """TensorProtosDBInput."""
