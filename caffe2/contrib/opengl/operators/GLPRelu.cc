@@ -32,19 +32,18 @@ class GLPRelu : public GLFilter {
           int _output_tile_y,
           int _output_tile_width,
           int _output_tile_height)
-      : GLFilter(
-            "GLPRelu",
-            vertex_shader,
-            fragment_shader,
-            std::vector<binding*>({BINDING(inputData)}),
-            std::vector<binding*>({BINDING(scale_block)}),
-            {/* no attributes */},
-            {{"USE_RELU", caffe2::to_string(PRelu)},
-             {"OUTPUT_TILES", caffe2::to_string(_output_tile_x * _output_tile_y)},
-             {"OUTPUT_TILE_X", caffe2::to_string(_output_tile_x)},
-             {"OUTPUT_TILE_WIDTH", caffe2::to_string(_output_tile_width)},
-             {"OUTPUT_TILE_HEIGHT", caffe2::to_string(_output_tile_height)},
-             {"TILED_CONVOLUTION", caffe2::to_string(_output_tile_x > 1 || _output_tile_y > 1)}}),
+      : GLFilter("GLPRelu",
+                 vertex_shader,
+                 fragment_shader,
+                 std::vector<binding*>({BINDING(inputData)}),
+                 std::vector<binding*>({BINDING(scale_block)}),
+                 {/* no attributes */},
+                 {{"USE_RELU", caffe2::to_string(PRelu)},
+                  {"OUTPUT_TILES", caffe2::to_string(_output_tile_x * _output_tile_y)},
+                  {"OUTPUT_TILE_X", caffe2::to_string(_output_tile_x)},
+                  {"OUTPUT_TILE_WIDTH", caffe2::to_string(_output_tile_width)},
+                  {"OUTPUT_TILE_HEIGHT", caffe2::to_string(_output_tile_height)},
+                  {"TILED_PRELU", caffe2::to_string(_output_tile_x > 1 || _output_tile_y > 1)}}),
         scale(_scale),
         scale_size(_scale_size),
         channels(_channels),
@@ -67,7 +66,7 @@ class GLPRelu : public GLFilter {
                   {"OUTPUT_TILE_X", caffe2::to_string(1)},
                   {"OUTPUT_TILE_WIDTH", caffe2::to_string(1)},
                   {"OUTPUT_TILE_HEIGHT", caffe2::to_string(1)},
-                  {"TILED_CONVOLUTION", caffe2::to_string(0)}}),
+                  {"TILED_PRELU", caffe2::to_string(0)}}),
         scale(nullptr),
         scale_block(nullptr),
         scale_size(0),
@@ -88,76 +87,72 @@ class GLPRelu : public GLFilter {
 // MARK: GLSL
 
 const char* GLPRelu::fragment_shader = R"GLSL(#version 300 es
-
+#define TILED_PRELU                 $(TILED_PRELU)
 #define USE_RELU                    $(USE_RELU)
+
+// tiling
 #define OUTPUT_TILES                $(OUTPUT_TILES)
 #define OUTPUT_TILE_X               $(OUTPUT_TILE_X)
 #define OUTPUT_TILE_WIDTH           $(OUTPUT_TILE_WIDTH)
 #define OUTPUT_TILE_HEIGHT          $(OUTPUT_TILE_HEIGHT)
-#define TILED_CONVOLUTION           $(TILED_CONVOLUTION)
 
+// common
 precision mediump float;
-precision mediump int;
-precision mediump sampler2D;
+precision highp int;
 
-const ivec2 outputTileSize = ivec2(OUTPUT_TILE_WIDTH, OUTPUT_TILE_HEIGHT);
+TEXTURE_INPUT(inputData);
+TEXTURE_OUTPUT(0, outputData);
 
 in highp vec2 v_texCoord;
 
-uniform sampler2D inputData;
-layout(location = 0) out mediump vec4 outputData0;
+#if USE_RELU
 
-#if !USE_RELU
-#if TILED_CONVOLUTION == 1
+// Relu
+void main() {
+  ivec2 inputSize = textureSize(inputData, 0);
+  ivec2 texelCoord = ivec2(v_texCoord * vec2(inputSize));
+  vec4 value = TEXTURE_LOAD(inputData, texelCoord);
+  outputData = TEXTURE_STORE(max(value, vec4(0.0)));
+}
+
+#else
+
+#if TILED_PRELU
+const ivec2 outputTileSize = ivec2(OUTPUT_TILE_WIDTH, OUTPUT_TILE_HEIGHT);
+
 layout (std140) uniform scale_block {
   highp uvec4 scale[(OUTPUT_TILES + 1) / 2];
 };
 
+void main() {
+  ivec2 inputSize = textureSize(inputData, 0);
+  ivec2 texelCoord = ivec2(v_texCoord * vec2(inputSize));
+
+  ivec2 tile = texelCoord / outputTileSize; // 2D output tile idx
+  int tileNum = OUTPUT_TILE_X * tile.y + tile.x; // 1D output tile idx
+
+  // outputData = value > 0 ? value : value * weight;
+  vec4 value = TEXTURE_LOAD(inputData, texelCoord);
+  vec4 preluValue = (tileNum % 2 == 0) ? unpackHalf4x16(scale[tileNum/2].xy) : unpackHalf4x16(scale[tileNum/2].zw);
+  value = mix(value * preluValue, value, vec4(greaterThan(value, vec4(0))));
+  outputData = TEXTURE_STORE(value);
+}
 #else
 layout (std140) uniform scale_block {
   highp uvec4 scale;
 };
-#endif
-
-#define unpackHalf4x16(pd) vec4(unpackHalf2x16(pd.x), unpackHalf2x16(pd.y))
-#endif
-
-#if !USE_RELU
-
-#if TILED_CONVOLUTION
-void main() {
-  ivec2 inputSize = textureSize(inputData, 0);
-  ivec2 texelCoord = ivec2(v_texCoord * vec2(inputSize));
-  
-  ivec2 tile = texelCoord / outputTileSize; // 2D output tile idx
-  
-  int tileNum = OUTPUT_TILE_X * tile.y + tile.x; // 1D output tile idx
-  
-  // output.data     = value > 0 ? value : value * weight;
-  vec4 value = texelFetch(inputData, texelCoord, 0);
-  vec4 preluValue = (tileNum % 2 == 0) ? unpackHalf4x16(scale[tileNum/2].xy) : unpackHalf4x16(scale[tileNum/2].zw);
-  outputData0 = mix(value * preluValue, value, vec4(greaterThan(value, vec4(0))));
-}
-
-#else
-
 void main() {
   ivec2 inputSize = textureSize(inputData, 0);
   ivec2 texelCoord = ivec2(v_texCoord * vec2(inputSize));
 
-  // output.data     = value > 0 ? value : value * weight;
-  vec4 value = texelFetch(inputData, texelCoord, 0);
-  outputData0 = mix(value * unpackHalf4x16(scale.xy), value, vec4(greaterThan(value, vec4(0))));
+  // outputData = value > 0 ? value : value * weight;
+  vec4 value = TEXTURE_LOAD(inputData, texelCoord);
+  value = mix(value * unpackHalf4x16(scale.xy), value, vec4(greaterThan(value, vec4(0))));
+  outputData = TEXTURE_STORE(value);
 }
-#endif // TILED_CONVOLUTION
+#endif // TILED_PRELU
 
-#else // Relu
-void main() {
-  ivec2 inputSize = textureSize(inputData, 0);
-  ivec2 texelCoord = ivec2(v_texCoord * vec2(inputSize));
-  outputData0 = max(texelFetch(inputData, texelCoord, 0), vec4(0.0));
-}
-#endif
+#endif // USE_RELU
 
 )GLSL";
 
@@ -191,8 +186,8 @@ void GLPRelu::prelu(const GLImageVector<T>& input_images,
       run(input_attachments,
           {output_image->textures.begin() + is, output_image->textures.begin() + is + 1},
           [&]() {},
-          output_image->width * output_image->tile_x,
-          output_image->height * output_image->tile_y);
+          output_image->texture_width,
+          output_image->texture_height);
     }
   }
 }

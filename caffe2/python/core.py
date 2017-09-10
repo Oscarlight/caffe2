@@ -312,6 +312,7 @@ def CreateOperator(
         operator.engine = engine
     # random seed is defined in the device option, so we need to do special
     # care.
+
     if 'random_seed' in kwargs:
         operator.device_option.random_seed = kwargs['random_seed']
         del kwargs['random_seed']
@@ -865,6 +866,7 @@ StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
     def _GetInitGradients(self, ys):
         input_to_grad = {}
         gradient_ops = []
+
         for y, g in viewitems(ys):
             autograd_op = None
             if g is None:
@@ -1467,6 +1469,8 @@ class Net(object):
             return do_set(self.GivenTensorInt64Fill)
         elif array.dtype == np.str:
             return do_set(self.GivenTensorStringFill)
+        elif array.dtype == np.bool:
+            return do_set(self.GivenTensorBoolFill)
         else:
             return do_set(self.GivenTensorFill)
 
@@ -1491,6 +1495,20 @@ class Net(object):
                 if input == blob_name:
                     return True
         return blob_name in self._external_input_map
+
+    def UsedBlobNames(self):
+        """
+        Returns a set of blob names used in the net
+        """
+        blob_names = set()
+        for op in self._net.op:
+            blob_names |= set(op.input)
+            blob_names |= set(op.output)
+        if self._net.external_input:
+            blob_names |= set(self._net.external_input)
+        if self._net.external_output:
+            blob_names |= set(self._net.external_output)
+        return blob_names
 
     def GetBlobRef(self, blob_name):
         """

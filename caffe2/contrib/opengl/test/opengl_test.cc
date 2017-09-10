@@ -64,7 +64,7 @@ void checkError1D(const TensorCPU& t1, const TensorCPU& t2, float error) {
                absolute_error(t1_i, t2_i),
                relative_error(t1_i, t2_i) * 100);
         if (count++ == 10) {
-          break;
+          CAFFE_THROW("--- Test Failed ---");
         }
       }
     }
@@ -112,21 +112,30 @@ void checkError(const TensorCPU& t1, const TensorCPU& t2, float error) {
 #else
 
   int count = 0;
+  float maxError = 0, minError = 0;
   if (t1.template IsType<float>()) {
     for (auto i = 0; i < t1.size(); ++i) {
       const float t1_i = t1.template data<float>()[i];
       const float t2_i = t2.template data<float>()[i];
       if (!(absolute_error(t1_i, t2_i) <= error || relative_error(t1_i, t2_i) <= 0.08)) {
-        gl_log(GL_ERR,
-               "i: %d, GL: %.2f, CPU: %.2f, absolute error: %.2f, relative error: %.2f%%\n",
-               i,
-               t1_i,
-               t2_i,
-               absolute_error(t1_i, t2_i),
-               relative_error(t1_i, t2_i) * 100);
-        if (count++ == 10) {
-          break;
+        if (count < 10) {
+          gl_log(GL_ERR,
+                 "i: %d, GL: %.2f, CPU: %.2f, absolute error: %.2f, relative error: %.2f%%\n",
+                 i,
+                 t1_i,
+                 t2_i,
+                 absolute_error(t1_i, t2_i),
+                 relative_error(t1_i, t2_i) * 100);
+        } else {
+          CAFFE_THROW("--- Test Failed ---");
         }
+        count++;
+      }
+      float err = t1_i - t2_i;
+      if (err > maxError) {
+        maxError = err;
+      } else if (err < minError) {
+        minError = err;
       }
     }
   } else if (t1.template IsType<uint8_t>()) {
@@ -134,19 +143,33 @@ void checkError(const TensorCPU& t1, const TensorCPU& t2, float error) {
       const uint8_t t1_i = t1.template data<uint8_t>()[i];
       const uint8_t t2_i = t2.template data<uint8_t>()[i];
       if (!(absolute_error(t1_i, t2_i) <= error || relative_error(t1_i, t2_i) <= 0.08)) {
-        gl_log(GL_ERR,
-               "i: %d, GL: %d, CPU: %d, absolute error: %.2f, relative error: %.2f%%\n",
-               i,
-               t1_i,
-               t2_i,
-               absolute_error(t1_i, t2_i),
-               relative_error(t1_i, t2_i) * 100);
-        if (count++ == 10) {
-          break;
+        if (count < 10) {
+          gl_log(GL_ERR,
+                 "i: %d, GL: %d, CPU: %d, absolute error: %.2f, relative error: %.2f%%\n",
+                 i,
+                 t1_i,
+                 t2_i,
+                 absolute_error(t1_i, t2_i),
+                 relative_error(t1_i, t2_i) * 100);
+        } else {
+          CAFFE_THROW("--- Test Failed ---");
         }
+        count++;
+      }
+      float err = t1_i - t2_i;
+      if (err > maxError) {
+        maxError = err;
+      } else if (err < minError) {
+        minError = err;
       }
     }
   }
+  gl_log(GL_LOG,
+         "#errors = %d in %d, maxError = %f, minError = %f\n",
+         count,
+         (int)t1.size(),
+         maxError,
+         minError);
 #endif
 }
 
@@ -259,7 +282,7 @@ void testOpenGLConv(int N,
     } else {
       float* data = t->mutable_data<float>();
       for (int i = 0; i < t->size(); i++) {
-        data[i] = -1;
+        data[i] = 1;
       }
     }
 #if 0
@@ -635,9 +658,95 @@ void testOpenGLRelu(int N, int C, int H, int W, int input_tile_x, int input_tile
   checkError(ws.GetBlob("Y_cpu")->Get<TensorCPU>(), ws.GetBlob("Y_ref")->Get<TensorCPU>(), error);
 }
 
-void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1) {
+void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1, int input_tile_x = 1, int input_tile_y = 1) {
   LOG(INFO) << "OpenGL Add Test "
             << "C: " << C << ", H: " << H << ", W: " << W;
+  Workspace ws;
+  {
+    auto* t0 = ws.CreateBlob("X_cpu0")->GetMutable<TensorCPU>();
+    t0->Resize(N, C, H, W);
+    CPUContext ctx0;
+    // Too noisy.
+    math::RandGaussian<float, CPUContext>(t0->size(), 0, 30, t0->mutable_data<float>(), &ctx0);
+
+    auto* t1 = ws.CreateBlob("X_cpu1")->GetMutable<TensorCPU>();
+    t1->Resize(N, C, H, W);
+    CPUContext ctx1;
+    // Too noisy.
+    math::RandGaussian<float, CPUContext>(t1->size(), 0, 30, t1->mutable_data<float>(), &ctx1);
+  }
+
+  NetDef netdef;
+  {
+    auto& op = *(netdef.add_op());
+    op.set_type("CopyToOpenGL");
+    op.add_input("X_cpu0");
+    op.add_output("X_gl0");
+    {
+      auto& arg = *(op.add_arg());
+      arg.set_name("tile_x");
+      arg.set_i(input_tile_x);
+    }
+    {
+      auto& arg = *(op.add_arg());
+      arg.set_name("tile_y");
+      arg.set_i(input_tile_y);
+    }
+  }
+
+  {
+    auto& op = *(netdef.add_op());
+    op.set_type("CopyToOpenGL");
+    op.add_input("X_cpu1");
+    op.add_output("X_gl1");
+    {
+      auto& arg = *(op.add_arg());
+      arg.set_name("tile_x");
+      arg.set_i(input_tile_x);
+    }
+    {
+      auto& arg = *(op.add_arg());
+      arg.set_name("tile_y");
+      arg.set_i(input_tile_y);
+    }
+  }
+
+  {
+    auto& op = *(netdef.add_op());
+    op.set_type("OpenGLAdd");
+    op.add_input("X_gl0");
+    op.add_input("X_gl1");
+    op.add_output("Y_gl");
+  }
+
+  {
+    auto& op = *(netdef.add_op());
+    op.set_type("CopyFromOpenGL");
+    op.add_input("Y_gl");
+    op.add_output("Y_cpu");
+  }
+
+  {
+    auto& op = *(netdef.add_op());
+    op.set_type("Add");
+    op.add_input("X_cpu0");
+    op.add_input("X_cpu1");
+    auto& arg = *(op.add_arg());
+    arg.set_name("order");
+    arg.set_s("NCHW");
+    op.add_output("Y_ref");
+  }
+  ws.RunNetOnce(netdef);
+  const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>(); // openGL
+  const auto& t1 = ws.GetBlob("Y_ref")->Get<TensorCPU>(); // CPU
+
+  checkError(t1, t2, error);
+}
+
+void testOpenGLSub(int N, int C, int H, int W, float error = 0.1) {
+  LOG(INFO) << "OpenGL Sub Test "
+            << "C: " << C << ", H: " << H << ", W: " << W;
+
   Workspace ws;
   {
     auto* t0 = ws.CreateBlob("X_cpu0")->GetMutable<TensorCPU>();
@@ -670,7 +779,7 @@ void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1) {
 
   {
     auto& op = *(netdef.add_op());
-    op.set_type("OpenGLAdd");
+    op.set_type("OpenGLSub");
     op.add_input("X_gl0");
     op.add_input("X_gl1");
     op.add_output("Y_gl");
@@ -685,7 +794,7 @@ void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1) {
 
   {
     auto& op = *(netdef.add_op());
-    op.set_type("Add");
+    op.set_type("Sub");
     op.add_input("X_cpu0");
     op.add_input("X_cpu1");
     auto& arg = *(op.add_arg());
@@ -696,8 +805,7 @@ void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1) {
   ws.RunNetOnce(netdef);
   const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>(); // openGL
   const auto& t1 = ws.GetBlob("Y_ref")->Get<TensorCPU>(); // CPU
-
-  checkError(ws.GetBlob("Y_cpu")->Get<TensorCPU>(), ws.GetBlob("Y_ref")->Get<TensorCPU>(), error);
+  checkError(t2, t1, error);
 }
 
 void testOpenGLConcat(
@@ -826,7 +934,7 @@ void testOpenGLTanh(int N, int C, int H, int W, float error) {
     auto* t = ws.CreateBlob("X_cpu")->GetMutable<TensorCPU>();
     t->Resize(N, C, H, W);
     CPUContext ctx;
-    math::RandGaussian<float, CPUContext>(t->size(), -3, 3, t->mutable_data<float>(), &ctx);
+    math::RandGaussian<float, CPUContext>(t->size(), 0, 2, t->mutable_data<float>(), &ctx);
   }
 
   NetDef netdef;
@@ -1337,7 +1445,8 @@ void OpenGL_speedtest(int N,
   net->TEST_Benchmark(1, 4, true);
 }
 
-void testOpenGLPadImage(int N, int C, int H, int W, int pad, float error) {
+void testOpenGLPadImage(
+    int N, int C, int H, int W, int pad_l, int pad_r, int pad_t, int pad_b, float error) {
   LOG(INFO) << "OpenGLPadImage Test";
   {
     Workspace ws;
@@ -1345,11 +1454,10 @@ void testOpenGLPadImage(int N, int C, int H, int W, int pad, float error) {
       auto* t = ws.CreateBlob("X_cpu")->GetMutable<TensorCPU>();
       t->Resize(N, C, H, W);
       CPUContext ctx;
-      //      math::RandGaussian<float, CPUContext>(t->size(), 0, 1, t->mutable_data<float>(),
-      //      &ctx);
-      for (auto i = 0; i < t->size(); ++i) {
-        t->mutable_data<float>()[i] = i + 1;
-      }
+      math::RandGaussian<float, CPUContext>(t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+      //      for (auto i = 0; i < t->size(); ++i) {
+      //        t->mutable_data<float>()[i] = i + 1;
+      //      }
     }
 
     NetDef netdef;
@@ -1366,8 +1474,23 @@ void testOpenGLPadImage(int N, int C, int H, int W, int pad, float error) {
       op.add_input("X_gl");
       {
         auto& arg = *(op.add_arg());
-        arg.set_name("pad");
-        arg.set_i(pad);
+        arg.set_name("pad_l");
+        arg.set_i(pad_l);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_r");
+        arg.set_i(pad_r);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_t");
+        arg.set_i(pad_t);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_b");
+        arg.set_i(pad_b);
       }
       {
         auto& arg = *(op.add_arg());
@@ -1395,8 +1518,23 @@ void testOpenGLPadImage(int N, int C, int H, int W, int pad, float error) {
       op.add_input("X_cpu");
       {
         auto& arg = *(op.add_arg());
-        arg.set_name("pad");
-        arg.set_i(pad);
+        arg.set_name("pad_l");
+        arg.set_i(pad_l);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_r");
+        arg.set_i(pad_r);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_t");
+        arg.set_i(pad_t);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("pad_b");
+        arg.set_i(pad_b);
       }
       {
         auto& arg = *(op.add_arg());
@@ -1414,8 +1552,15 @@ void testOpenGLPadImage(int N, int C, int H, int W, int pad, float error) {
   }
 }
 
-void testOpenGLResize(
-    int N, int C, int H, int W, int width_scale, int height_scale, int batch_size, float error) {
+void testOpenGLResize(int N,
+                      int C,
+                      int H,
+                      int W,
+                      int width_scale,
+                      int height_scale,
+                      float error,
+                      int input_tile_x = 1,
+                      int input_tile_y = 1) {
   LOG(INFO) << "OpenGLResize Test";
   {
     Workspace ws;
@@ -1432,6 +1577,16 @@ void testOpenGLResize(
       op.set_type("CopyToOpenGL");
       op.add_input("X_cpu");
       op.add_output("X_gl");
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("tile_x");
+        arg.set_i(input_tile_x);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("tile_y");
+        arg.set_i(input_tile_y);
+      }
     }
 
     {
@@ -1447,11 +1602,6 @@ void testOpenGLResize(
         auto& arg = *(op.add_arg());
         arg.set_name("height_scale");
         arg.set_f(height_scale);
-      }
-      {
-        auto& arg = *(op.add_arg());
-        arg.set_name("batch_size");
-        arg.set_i(batch_size);
       }
       {
         auto& arg = *(op.add_arg());
@@ -1787,7 +1937,7 @@ void compareModelsForOpenGL(std::string name,
     for (int i = 0; i < predictNet.mutable_op(0)->arg_size(); i++) {
       auto* arg = predictNet.mutable_op(0)->mutable_arg(i);
       if (arg->name() == "noise_std") {
-        arg->set_f(0.000001);
+        arg->set_f(0);
       }
     }
   }
@@ -1802,9 +1952,9 @@ void compareModelsForOpenGL(std::string name,
 
     NetDef truncatedOpenGLPredictNet = rewritePredictNetForOpenGL(truncatedPredictNet);
 
-    LOG(INFO) << "truncatedPredictNet";
-    dumpDefForOpenGL(truncatedPredictNet);
-
+    //    LOG(INFO) << "truncatedPredictNet";
+    //    dumpDefForOpenGL(truncatedPredictNet);
+    //
     LOG(INFO) << "truncatedOpenGLPredictNet";
     dumpDefForOpenGL(truncatedOpenGLPredictNet);
 
@@ -1831,6 +1981,21 @@ void compareModelsForOpenGL(std::string name,
       math::RandGaussian<float, CPUContext>(size, 0, 0.12, input + size, &ctx); // U: -0.436 ~ 0.436
       math::RandGaussian<float, CPUContext>(
           size, 0, 0.2, input + 2 * size, &ctx); // V: -0.615 ~ 0.615
+    } else if (name == "denoiser") {
+      CAFFE_ENFORCE_EQ(input_order, "NCHW");
+      CAFFE_ENFORCE_EQ(input_type, "float");
+      t_cpu->Resize(1, channel, height, width);
+      float* input = t_cpu->mutable_data<float>();
+      const int spatial_size = width * height;
+      math::RandGaussian<float, CPUContext>(spatial_size, 0, 0.33, input, &ctx); // R Channel
+      math::RandGaussian<float, CPUContext>(
+          spatial_size, 0, 0.33, input + spatial_size, &ctx); // G Channel
+      math::RandGaussian<float, CPUContext>(
+          spatial_size, 0, 0.33, input + 2 * spatial_size, &ctx); // B Channel
+      // Clamp Range of input [-1, +1]
+      for (auto i = 0; i < t_cpu->size(); ++i) {
+        input[i] = input[i] > 1 ? 1 : input[i] < -1 ? -1 : input[i];
+      }
     } else {
       CAFFE_THROW("CompareModels only works with style transfer and segmentation now");
     }
@@ -1844,10 +2009,15 @@ void compareModelsForOpenGL(std::string name,
       CAFFE_ENFORCE_EQ(input_order, "NHWC");
       CAFFE_ENFORCE_EQ(input_type, "uint8_t");
       t_gl->Resize(1, height, width, channel);
-      for (auto i = 0; i < t_gl->size(); ++i) {
-        t_gl->mutable_data<uint8_t>()[i] = i % 255;
-      }
+      uint8_t* input = t_gl->mutable_data<uint8_t>();
+      memcpy(input, t_cpu->mutable_data<uint8_t>(), t_cpu->capacity_nbytes());
     } else if (name == "segmentation") {
+      CAFFE_ENFORCE_EQ(input_order, "NCHW");
+      CAFFE_ENFORCE_EQ(input_type, "float");
+      t_gl->Resize(1, channel, height, width);
+      float* input = t_gl->mutable_data<float>();
+      memcpy(input, t_cpu->mutable_data<float>(), t_cpu->capacity_nbytes());
+    } else if (name == "denoiser") {
       CAFFE_ENFORCE_EQ(input_order, "NCHW");
       CAFFE_ENFORCE_EQ(input_type, "float");
       t_gl->Resize(1, channel, height, width);
@@ -1866,7 +2036,109 @@ void compareModelsForOpenGL(std::string name,
     {
       const auto& mt = mws.GetBlob(m_name)->Get<TensorCPU>(); // GPU
       const auto& ct = cws.GetBlob(c_name)->Get<TensorCPU>(); // CPU
-      checkError(mt, ct, 1);
+      if (name == "denoiser") {
+        checkError(mt, ct, 0.02); // 1% of Scale
+        LOG(INFO) << "Error Check Completed for Denoiser Layer: " << i;
+      } else {
+        checkError(mt, ct, 1);
+      }
+    }
+  }
+}
+
+void compareBatchedToTiledModels(std::string name,
+                                 const NetDef& initNet,
+                                 NetDef predictNet,
+                                 int width,
+                                 int height,
+                                 int channel,
+                                 std::string input_type,
+                                 std::string input_order) {
+
+  if (name == "styleTransfer") {
+    for (int i = 0; i < predictNet.mutable_op(0)->arg_size(); i++) {
+      auto* arg = predictNet.mutable_op(0)->mutable_arg(i);
+      if (arg->name() == "noise_std") {
+        arg->set_f(0);
+      }
+    }
+  }
+
+  for (auto i = 19; i < predictNet.op_size(); ++i) {
+    auto truncatedPredictNet = truncateAfter(predictNet, i);
+
+    // Change the last blob to external_output(0) for the predict net
+    auto output_blob = "_OUTPUT_BLOB__";
+    truncatedPredictNet.set_external_output(0, output_blob);
+    truncatedPredictNet.mutable_op(truncatedPredictNet.op_size() - 1)->set_output(0, output_blob);
+
+    NetDef bachedNet = rewritePredictNetForOpenGL(truncatedPredictNet, false, false);
+    NetDef tiledNet = rewritePredictNetForOpenGL(truncatedPredictNet, false, true);
+
+    LOG(INFO) << "truncatedPredictNet";
+    dumpDefForOpenGL(truncatedPredictNet);
+
+    LOG(INFO) << "truncatedOpenGLPredictNet";
+    dumpDefForOpenGL(bachedNet);
+
+    CPUContext ctx;
+
+    Workspace tws;
+    tws.RunNetOnce(initNet);
+
+    auto* t_batch = tws.CreateBlob(bachedNet.external_input(0))->GetMutable<TensorCPU>();
+    if (name == "styleTransfer") {
+      CAFFE_ENFORCE_EQ(input_order, "NHWC");
+      CAFFE_ENFORCE_EQ(input_type, "uint8_t");
+      t_batch->Resize(1, height, width, channel);
+      for (auto i = 0; i < t_batch->size(); ++i) {
+        t_batch->mutable_data<uint8_t>()[i] = i % 255;
+      }
+    } else if (name == "segmentation") {
+      CAFFE_ENFORCE_EQ(input_order, "NCHW");
+      CAFFE_ENFORCE_EQ(input_type, "float");
+      t_batch->Resize(1, channel, height, width);
+      float* input = t_batch->mutable_data<float>();
+      const int size = width * height;
+      // Limit input range to YUV
+      math::RandGaussian<float, CPUContext>(size, 0.5, 0.15, input, &ctx); // Y: 0 ~ 1
+      math::RandGaussian<float, CPUContext>(size, 0, 0.12, input + size, &ctx); // U: -0.436 ~ 0.436
+      math::RandGaussian<float, CPUContext>(
+          size, 0, 0.2, input + 2 * size, &ctx); // V: -0.615 ~ 0.615
+    } else {
+      CAFFE_THROW("CompareModels only works with style transfer and segmentation now");
+    }
+
+    Workspace bws;
+    bws.RunNetOnce(initNet);
+
+    auto* t_tiling = bws.CreateBlob(tiledNet.external_input(0))->GetMutable<TensorCPU>();
+    if (name == "styleTransfer") {
+      CAFFE_ENFORCE_EQ(input_order, "NHWC");
+      CAFFE_ENFORCE_EQ(input_type, "uint8_t");
+      t_tiling->Resize(1, height, width, channel);
+      uint8_t* input = t_tiling->mutable_data<uint8_t>();
+      memcpy(input, t_batch->mutable_data<uint8_t>(), t_batch->capacity_nbytes());
+
+    } else if (name == "segmentation") {
+      CAFFE_ENFORCE_EQ(input_order, "NCHW");
+      CAFFE_ENFORCE_EQ(input_type, "float");
+      t_tiling->Resize(1, channel, height, width);
+      float* input = t_tiling->mutable_data<float>();
+      memcpy(input, t_batch->mutable_data<float>(), t_batch->capacity_nbytes());
+    }
+
+    bws.RunNetOnce(bachedNet);
+    tws.RunNetOnce(tiledNet);
+
+    const auto batch_name = bachedNet.op(bachedNet.op_size() - 1).output(0);
+    const auto tile_name = tiledNet.op(tiledNet.op_size() - 1).output(0);
+
+    LOG(INFO) << "Checking correspondence for name: " << batch_name << ", idx: " << i;
+    {
+      const auto& bt = bws.GetBlob(batch_name)->Get<TensorCPU>(); // GPU
+      const auto& tt = tws.GetBlob(tile_name)->Get<TensorCPU>(); // CPU
+      checkError(bt, tt, 0.01);
     }
   }
 }
@@ -1882,7 +2154,9 @@ int runModelBenchmarks(caffe2::NetDef& init_net,
                        std::string input_order,
                        std::string engine, // "CPU", "OPENGL", or "MPSCNN"
                        bool run_individual,
-                       bool use_texture_input) {
+                       bool use_texture_input,
+                       bool use_tiling,
+                       bool run_fusion) {
   std::unique_ptr<caffe2::Workspace> workspace(new caffe2::Workspace());
 
   // caffe2::dumpDefForOpenGL(init_net);
@@ -1895,7 +2169,7 @@ int runModelBenchmarks(caffe2::NetDef& init_net,
   if (engine == "CPU") {
     net_def.CopyFrom(predict_net);
   } else if (engine == "OPENGL") {
-    if (!caffe2::tryConvertToOpenGL(init_net, predict_net, &net_def, use_texture_input)) {
+    if (!caffe2::tryConvertToOpenGL(init_net, predict_net, &net_def, use_texture_input, use_tiling, run_fusion)) {
       CAFFE_THROW("Failed to convert to openGL. Benchmark failed to run");
       return -1;
     }
@@ -1946,35 +2220,58 @@ int runModelBenchmarks(caffe2::NetDef& init_net,
     }
   } else {
     const int tile_x = 1, tile_y = 1;
-    ImageAllocator<uint8_t> allocator;
-    GLImageVector<uint8_t>* output_image = allocator.newImage(1,
-                                                              width,
-                                                              height,
-                                                              channel,
-                                                              tile_x,
-                                                              tile_y,
-#if CAFFE2_IOS
-                                                              true
-#else
-                                                              false
-#endif
-                                                              );
-
     Blob* blob = nullptr;
     if (!net_def.external_input_size()) {
       blob = workspace->CreateBlob("data");
     } else {
       blob = workspace->CreateBlob(net_def.external_input(0));
     }
-    blob->Reset(output_image);
-    const auto textures = (*output_image)[0]->textures;
-    for (int slice = 0; slice < textures.size(); slice++) {
-      textures[slice]->map_load([&](void* buffer,
-                                    size_t width,
-                                    size_t height,
-                                    size_t stride,
-                                    size_t channels,
-                                    const GLTexture::Type& type) {});
+    if (input_type == "float") {
+      ImageAllocator<float16_t> allocator;
+      GLImageVector<float16_t>* output_image = allocator.newImage(1,
+                                                                  width,
+                                                                  height,
+                                                                  channel,
+                                                                  tile_x,
+                                                                  tile_y,
+#if CAFFE2_IOS
+                                                                  true
+#else
+                                                                  false
+#endif
+                                                                  );
+      blob->Reset(output_image);
+      for (auto& texture : (*output_image)[0]->textures) {
+        texture->map_load([&](void* buffer,
+                              size_t width,
+                              size_t height,
+                              size_t stride,
+                              size_t channels,
+                              const GLTexture::Type& type) {});
+      }
+    } else {
+      ImageAllocator<uint8_t> allocator;
+      GLImageVector<uint8_t>* output_image = allocator.newImage(1,
+                                                                width,
+                                                                height,
+                                                                channel,
+                                                                tile_x,
+                                                                tile_y,
+#if CAFFE2_IOS
+                                                                true
+#else
+                                                                false
+#endif
+                                                                );
+      blob->Reset(output_image);
+      for (auto& texture : (*output_image)[0]->textures) {
+        texture->map_load([&](void* buffer,
+                              size_t width,
+                              size_t height,
+                              size_t stride,
+                              size_t channels,
+                              const GLTexture::Type& type) {});
+      }
     }
   }
 
@@ -2020,7 +2317,8 @@ int runModelBenchmarks(caffe2::NetDef& init_net,
         }
         glFinish();
 
-        LOG(INFO) << net_def.op(k).type() << ": " << (double)timer.MilliSeconds() / main_runs;
+        LOG(INFO) << "Operator #" << k << " " << net_def.op(k).type() << ": "
+                  << (double)timer.MilliSeconds() / main_runs;
       }
     }
   }
@@ -2092,7 +2390,7 @@ static void squareFactors(int N, int& r1, int& r2) {
 void testOpenGL() {
   {
     // Test a bunch of different tiled convolutions
-    std::vector<int> channels({4, 8, 16, 32, 64, 128, 256, 512});
+    std::vector<int> channels({3, 4, 6, 8, 12, 16, 32, 64, 128, 256, 512});
 
     for (const auto& input_channels : channels) {
       int tile_x = 1, tile_y = 1;
@@ -2230,9 +2528,13 @@ void testOpenGL() {
       testOpenGLConv(1, channel, 10, 10, channel, 3, 3, 0, 1, ConvTransposePRelu, 0.1 * channel / 8, true, 1, 1, tile_x, tile_y, true);
       testOpenGLConv(1, channel, 10, 10, channel, 3, 3, 0, 1, ConvRelu, 0.1 * channel / 8, true, 1, 1, tile_x, tile_y, true);
       testOpenGLConv(1, channel, 10, 10, channel, 3, 3, 0, 1, ConvTransposeRelu, 0.1 * channel / 8, true, 1, 1, tile_x, tile_y, true);
-      
+
       testOpenGLPRelu(1, channel, 13, 4, channel, tile_x, tile_y, 0.1);
       testOpenGLRelu(1, channel, 4, 17, tile_x, tile_y, 0.1);
+      testOpenGLConv(1, channel, 16, 16, channel, 3, 3, 0, 2, MaxPool, 0.01, true, 1, 1, tile_x, tile_y, true);
+      testOpenGLConv(1, channel, 16, 16, channel, 3, 3, 0, 2, AveragePool, 0.01, true, 1, 1, tile_x, tile_y, true);
+      testOpenGLAdd(1, channel, 14, 8, 0.1, tile_x, tile_y);
+      testOpenGLResize(1, channel, 16, 16, 2, 2, 0.1, tile_x, tile_y);
       // clang-format on
     }
   }
@@ -2428,9 +2730,11 @@ void testOpenGL() {
 
     LOG(INFO) << "Test OpenGL Add";
     testOpenGLAdd(1, 16, 640, 360, 0.1);
-    testOpenGLAdd(1, 16, 640, 360, 0.1);
-    testOpenGLAdd(1, 16, 640, 360, 0.1);
     testOpenGLAdd(1, 12, 640, 360, 0.1);
+
+    LOG(INFO) << "Test OpenGL Sub";
+    testOpenGLSub(1, 16, 640, 360, 0.1);
+    testOpenGLSub(1, 12, 640, 360, 0.1);
 
     LOG(INFO) << "Test OpenGL Sigmoid";
     testOpenGLSigmoid(1, 4, 16, 16, 0.1);
@@ -2457,8 +2761,9 @@ void testOpenGL() {
 
     LOG(INFO) << "Test OpenGL Softmax";
     testOpenGLSoftmax(1, 100, 0.1);
+    testOpenGLSoftmax(1, 500, 0.1);
     testOpenGLSoftmax(1, 1000, 0.1);
-    testOpenGLSoftmax(1, 10000, 0.1);
+    testOpenGLSoftmax(1, 5000, 0.1);
 
     LOG(INFO) << "Test OpenGL InstanceNorm";
     testOpenGLInstanceNorm(1, 4, 16, 16, 0.2);
@@ -2489,14 +2794,14 @@ void testOpenGL() {
     testOpenGLInstanceNormPRelu(1, 6, 640, 360, 0.2);
 
     LOG(INFO) << "Test OpenGL ResizeNearest";
-    testOpenGLResize(1, 4, 16, 16, 1, 1, 1, 0.1);
-    testOpenGLResize(1, 4, 16, 16, 2, 2, 1, 0.1);
-    testOpenGLResize(1, 4, 16, 16, 3, 3, 1, 0.1);
-    testOpenGLResize(1, 4, 16, 16, 4, 4, 1, 0.1);
-    testOpenGLResize(1, 16, 25, 25, 3, 3, 2, 0.1);
-    testOpenGLResize(1, 16, 25, 25, 3, 3, 4, 0.1);
-    testOpenGLResize(1, 12, 25, 25, 3, 3, 3, 0.1);
-    testOpenGLResize(1, 4, 720, 1280, 3, 3, 1, 0.1);
+    testOpenGLResize(1, 4, 16, 16, 1, 1, 0.1);
+    testOpenGLResize(1, 4, 16, 16, 2, 2, 0.1);
+    testOpenGLResize(1, 4, 16, 16, 3, 3, 0.1);
+    testOpenGLResize(1, 4, 16, 16, 4, 4, 0.1);
+    testOpenGLResize(1, 16, 25, 25, 3, 3, 0.1);
+    testOpenGLResize(1, 16, 25, 25, 3, 3, 0.1);
+    testOpenGLResize(1, 12, 25, 25, 3, 3, 0.1);
+    testOpenGLResize(1, 4, 720, 1280, 3, 3, 0.1);
 
     // debug style transfer
     // conv
@@ -2510,9 +2815,9 @@ void testOpenGL() {
     testOpenGLConv(1, 6, 112, 112, 3, 4, 4, 0, 2, ConvTranspose, 0.5, true, 2, 1);
 
     LOG(INFO) << "Test OpenGL PadImage";
-    testOpenGLPadImage(1, 3, 4, 4, 2, 0.01);
-    testOpenGLPadImage(1, 3, 50, 80, 10, 0.01);
-    testOpenGLPadImage(1, 12, 50, 80, 10, 0.01);
+    testOpenGLPadImage(1, 3, 11, 11, 0, 1, 0, 1, 0.001);
+    testOpenGLPadImage(1, 3, 50, 80, 0, 1, 0, 1, 0.001);
+    testOpenGLPadImage(1, 12, 50, 80, 10, 9, 10, 9, 0.001);
 
     LOG(INFO) << "Test OpenGL Preprocess";
     testOpenGLPreprocess(1, 4, 8, 8, 0.20);
@@ -2577,11 +2882,11 @@ void testOpenGL() {
     testOpenGLInstanceNormPRelu(3, 4, 16, 16, 0.2);
     testOpenGLInstanceNormPRelu(15, 4, 16, 16, 0.2);
 
-    testOpenGLResize(3, 4, 16, 16, 1, 1, 1, 0.1);
-    testOpenGLResize(16, 4, 16, 16, 1, 1, 1, 0.1);
+    testOpenGLResize(3, 4, 16, 16, 1, 1, 0.1);
+    testOpenGLResize(16, 4, 16, 16, 1, 1, 0.1);
 
-    testOpenGLPadImage(3, 3, 4, 4, 2, 0.01);
-    testOpenGLPadImage(23, 3, 4, 4, 2, 0.01);
+    testOpenGLPadImage(3, 3, 4, 4, 0, 1, 0, 1, 0.01);
+    testOpenGLPadImage(23, 3, 4, 4, 0, 1, 0, 1, 0.01);
 
     testOpenGLSoftmax(3, 1000, 0.1);
     testOpenGLSoftmax(27, 100, 0.1);

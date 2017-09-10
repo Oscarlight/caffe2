@@ -579,6 +579,9 @@ CAFFE2_SPECIALIZED_REDUCEMIN(float)
     *y = *std::max_element(x, x + N);      \
   }
 CAFFE2_SPECIALIZED_REDUCEMAX(float)
+CAFFE2_SPECIALIZED_REDUCEMAX(int32_t)
+CAFFE2_SPECIALIZED_REDUCEMAX(int64_t)
+
 #undef CAFFE2_SPECIALIZED_REDUCEMAX
 
 #define CAFFE2_SPECIALIZED_ROWWISEMAX(T)                         \
@@ -1391,7 +1394,9 @@ void CopyMatrix<CPUContext>(
   template <>                                                       \
   void CopyVector<T, CPUContext>(                                   \
       const int N, const T* src, T* dst, CPUContext* /*context*/) { \
-    memcpy(dst, src, sizeof(T) * N);                                \
+    if (src != dst && N > 0) {                                      \
+      memcpy(dst, src, sizeof(T) * N);                              \
+    }                                                               \
   }
 CAFFE2_SPECIALIZED_COPYVECTOR(float)
 #undef CAFFE2_SPECIALIZED_COPYVECTOR

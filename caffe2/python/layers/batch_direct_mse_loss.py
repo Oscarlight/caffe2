@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 ## @package batch_mse_loss
 # Module caffe2.python.layers.batch_mse_loss
+=======
+## @package batch_direct_mse_loss
+# Module caffe2.python.layers.batch_direct_mse_loss
+>>>>>>> f4e5abfef9c65e8cfb4ab10d990fe3cc8d785371
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -17,7 +22,11 @@ import numpy as np
 
 class BatchDirectMSELoss(ModelLayer):
 
+<<<<<<< HEAD
     def __init__(self, model, input_record, name='batch_mse_loss', **kwargs):
+=======
+    def __init__(self, model, input_record, name='batch_direct_mse_loss', **kwargs):
+>>>>>>> f4e5abfef9c65e8cfb4ab10d990fe3cc8d785371
         super(BatchDirectMSELoss, self).__init__(model, name, input_record, **kwargs)
 
         assert schema.is_schema_subset(
@@ -58,4 +67,8 @@ class BatchDirectMSELoss(ModelLayer):
             net.NextScopedBlob('l2')
         )
 
+<<<<<<< HEAD
         net.AveragedLoss(l2dist, self.output_schema.field_blobs())
+=======
+        net.AveragedLoss(l2dist, self.output_schema.field_blobs())
+>>>>>>> f4e5abfef9c65e8cfb4ab10d990fe3cc8d785371

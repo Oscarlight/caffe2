@@ -33,6 +33,20 @@ class TestShapeInference(test_util.TestCase):
         self.assertEquals(shapes['fc2_b'], [55])
         self.assertEquals(shapes['fc2'], [64, 55])
 
+    def testFCAxis2(self):
+        model = model_helper.ModelHelper(name="test_model")
+        model.net.FC(["x", "w", "b"], ["y"], axis=2)
+        workspace.FeedBlob("x", np.random.rand(4, 20, 36).astype(np.float32))
+        workspace.FeedBlob("w", np.random.rand(36, 36).astype(np.float32))
+        workspace.FeedBlob("b", np.random.rand(36,).astype(np.float32))
+        self.InferTensorRunAndCompare(model)
+
+    def testShapeInferenceSlice(self):
+        model = model_helper.ModelHelper(name="test_model")
+        model.net.Slice(["x"], ["y"], starts=[0, 0, 0, 0], ends=[-1, -1, -3, -1])
+        workspace.FeedBlob("x", np.random.rand(64, 1, 255, 384).astype(np.float32))
+        self.InferTensorRunAndCompare(model)
+
     def testShapeInferenceDistances(self):
         model = model_helper.ModelHelper(name="test_model")
         model.SquaredL2Distance(["x", "y"], "zsq")
@@ -304,6 +318,7 @@ class TestShapeInference(test_util.TestCase):
 
         self.InferTensorRunAndCompare(model)
 
+
         model = model_helper.ModelHelper(name="test_model")
         model.Flatten("X", "Flat")
         model.Flatten("empty", "EmptyFlat")
@@ -318,6 +333,34 @@ class TestShapeInference(test_util.TestCase):
         workspace.FeedBlob("X", np.random.rand(4, 26, 32).astype(np.float32))
 
         self.InferTensorRunAndCompare(model)
+
+    def testLengthsSum(self):
+        model = model_helper.ModelHelper(name="test_model")
+        model.LengthsSum(["X", "length"], ["sum"])
+        workspace.FeedBlob("X", np.random.rand(6, 32).astype(np.float32))
+        workspace.FeedBlob("length", np.array([1, 2, 3], dtype=np.int32))
+
+        self.InferTensorRunAndCompare(model)
+
+    def testConcat(self):
+        net = core.Net("concat")
+
+        net.Concat(["A", "B"], ["C", "splits"], axis=1)
+        net.Concat(["C", "D"], ["E"], order="NCHW")
+        net.Concat(["E", "F"], ["G"], add_axis=1, order="NHWC")
+        (shapes, types) = workspace.InferShapesAndTypes(
+            [net],
+            {
+                'A': [10, 12, 9, 10],
+                'B': [10, 9, 9, 10],
+                'D': [10, 2, 9, 10],
+                'F': [10, 23, 9, 10]
+            }
+        )
+        self.assertEqual(shapes['C'], [10, 21, 9, 10])
+        self.assertEqual(shapes['splits'], [2])
+        self.assertEqual(shapes['E'], [10, 23, 9, 10])
+        self.assertEqual(shapes['G'], [10, 23, 9, 2, 10])
 
     def testSqueeze(self):
         net = core.Net("sq")
