@@ -18,6 +18,7 @@ import numpy as np
 class BatchDirectWeightedL1Loss(ModelLayer):
 
     def __init__(self, model, input_record,
+        max_scale = 1.0,
         name='batch_direct_weighted_l1_loss', 
         **kwargs):
         super(BatchDirectWeightedL1Loss, self).__init__(
@@ -31,7 +32,7 @@ class BatchDirectWeightedL1Loss(ModelLayer):
             input_record
         )
         self.tags.update([Tags.EXCLUDE_FROM_PREDICTION])
-
+        self.max_scale = max_scale
         self.output_schema = schema.Scalar(
             np.float32,
             self.get_next_blob_reference('output'))
@@ -61,11 +62,26 @@ class BatchDirectWeightedL1Loss(ModelLayer):
             net.NextScopedBlob('l1')
         )
 
-        abs_label = net.Abs(
-            [label],
-            net.NextScopedBlob('abs_label')
+        scaler = net.ScaleWithClip(
+            [label], 
+            net.NextScopedBlob('scaler'), 
+            max_scale = self.max_scale,
         )
 
-        
+        scaler = net.StopGradient(
+            scaler,
+            net.NextScopedBlob('stopped_scaler')
+        )
 
-        net.AveragedLoss(l1dist, self.output_schema.field_blobs())
+        scaler = net.Squeeze(
+            scaler,
+            net.NextScopedBlob('squeezed_scaler'),
+            dims=[1]
+        )
+
+        scaled_loss = net.Mul(
+            [l1dist, scaler],
+            net.NextScopedBlob('scaled_loss')
+        )
+
+        net.AveragedLoss(scaled_loss, self.output_schema.field_blobs())
