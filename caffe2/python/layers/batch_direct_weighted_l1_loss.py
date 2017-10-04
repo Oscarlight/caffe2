@@ -33,9 +33,23 @@ class BatchDirectWeightedL1Loss(ModelLayer):
         )
         self.tags.update([Tags.EXCLUDE_FROM_PREDICTION])
         self.max_scale = max_scale
-        self.output_schema = schema.Scalar(
-            np.float32,
-            self.get_next_blob_reference('output'))
+        self.output_schema = schema.Struct(
+            ('loss', schema.Scalar(
+                np.float32,
+                self.get_next_blob_reference('loss')
+                )
+            ),
+            ('l1_metric', schema.Scalar(
+                np.float32,
+                self.get_next_blob_reference('l1_metric')
+                )
+            ),
+            ('scaled_l1_metric', schema.Scalar(
+                np.float32,
+                self.get_next_blob_reference('scaled_l1_metric')
+                )
+            ),            
+        )
 
     def add_ops(self, net):
         prediction = self.input_record.prediction()
@@ -59,12 +73,14 @@ class BatchDirectWeightedL1Loss(ModelLayer):
 
         l1dist = net.L1Distance(
             [label, prediction],
-            net.NextScopedBlob('l1')
+            net.NextScopedBlob('l1_dist')
         )
 
-        scaler = net.ScaleWithClip(
+        net.AveragedLoss(l1dist, self.output_schema.l1_metric())
+
+        scaler, scaler_no_clip = net.ScaleWithClip(
             [label], 
-            net.NextScopedBlob('scaler'), 
+            [net.NextScopedBlob('scaler'), net.NextScopedBlob('scaler_no_clip')],
             max_scale = self.max_scale,
         )
 
@@ -73,9 +89,20 @@ class BatchDirectWeightedL1Loss(ModelLayer):
             net.NextScopedBlob('stopped_scaler')
         )
 
+        scaler_no_clip = net.StopGradient(
+            scaler_no_clip,
+            net.NextScopedBlob('stopped_scaler_no_clip')
+        )
+
         scaler = net.Squeeze(
             scaler,
             net.NextScopedBlob('squeezed_scaler'),
+            dims=[1]
+        )
+
+        scaler_no_clip = net.Squeeze(
+            scaler_no_clip,
+            net.NextScopedBlob('squeezed_scaler_no_clip'),
             dims=[1]
         )
 
@@ -84,4 +111,14 @@ class BatchDirectWeightedL1Loss(ModelLayer):
             net.NextScopedBlob('scaled_loss')
         )
 
-        net.AveragedLoss(scaled_loss, self.output_schema.field_blobs())
+        scaled_loss_no_clip = net.Mul(
+            [l1dist, scaler_no_clip],
+            net.NextScopedBlob('scaled_loss_no_clip')
+        )
+
+        net.AveragedLoss(
+            scaled_loss, self.output_schema.loss()
+        )
+        net.AveragedLoss(
+            scaled_loss_no_clip, self.output_schema.scaled_l1_metric()
+        )
