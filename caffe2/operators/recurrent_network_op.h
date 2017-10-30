@@ -279,9 +279,8 @@ class RecurrentNetworkOp final : public Operator<Context> {
 
     // If we don't have a backward step net, this operator is forward_only
     // and we can avoid creating multiple workspaces.
-
     bool has_backward_pass =
-        OperatorBase::GetSingleArgument<string>("backward_step_net", "") != "";
+        OperatorBase::GetSingleArgument<string>("backward_step_net_", "") != "";
 
     // With backward pass: we need to create workspace for each timestep
     detail::ScratchWorkspaces* scratch =
@@ -369,7 +368,7 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
 
     CAFFE_ENFORCE(ws);
     const auto stepNet =
-        OperatorBase::GetSingleArgument<string>("backward_step_net", "");
+        OperatorBase::GetSingleArgument<string>("backward_step_net_", "");
     CAFFE_ENFORCE(
         google::protobuf::TextFormat::ParseFromString(stepNet, &stepNetDef_));
 

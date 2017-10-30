@@ -253,14 +253,23 @@ def recurrent_net(
             'backward_link_internal': [str(l) for l in backward_link_internal],
             'backward_link_external': [str(l) for l in backward_link_external],
             'backward_link_offset': backward_link_offset,
-            'backward_step_net': str(backward_cell_net.Proto()),
+            'backward_step_net_': str(backward_cell_net.Proto()),
             'outputs_with_grads': outputs_with_grads,
             'recompute_blobs_on_backward': [
                 str(b) for b in recompute_blobs_on_backward
             ],
             'param_grads': param_grads,
         }
-
+    # @mingda
+    # For some mysterious reasons, if pass the key as "backward_step_net",
+    # the operator will receive empty string:
+    # arg {
+    #   name: "backward_step_net"
+    #   s: ""
+    # }
+    # The solution is stupidly simple: use any name expect for "backward_step_net"
+    # Change the name in recurrent_network_op.h as well
+    # change "backward_step_net" to "backward_step_net_"
     results = net.RecurrentNetwork(
         all_inputs,
         all_outputs + [s("step_workspaces")],
