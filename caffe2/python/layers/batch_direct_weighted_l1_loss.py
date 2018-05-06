@@ -18,7 +18,7 @@ import numpy as np
 class BatchDirectWeightedL1Loss(ModelLayer):
 
     def __init__(self, model, input_record,
-        max_scale = 1.0,
+        max_scale=1.0,
         name='batch_direct_weighted_l1_loss', 
         **kwargs):
         super(BatchDirectWeightedL1Loss, self).__init__(
@@ -119,6 +119,7 @@ class BatchDirectWeightedL1Loss(ModelLayer):
         net.AveragedLoss(
             scaled_loss, self.output_schema.loss()
         )
+        
         net.AveragedLoss(
             scaled_loss_no_clip, self.output_schema.scaled_l1_metric()
         )
